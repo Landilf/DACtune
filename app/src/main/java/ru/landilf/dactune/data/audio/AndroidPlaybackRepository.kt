@@ -9,8 +9,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.landilf.dactune.domain.model.*
 import ru.landilf.dactune.domain.repository.PlaybackRepository
-import ru.landilf.dactune.platform.AdaptiveKeepAliveService
+import ru.landilf.dactune.platform.KeepAliveService
 import ru.landilf.dactune.R
+import ru.landilf.dactune.domain.engine.SignalLevelHistory
 
 /** Application-scoped session state is shared by the service and all screen instances. */
 class AndroidPlaybackRepository(private val context: Context) : PlaybackRepository {
@@ -20,6 +21,7 @@ class AndroidPlaybackRepository(private val context: Context) : PlaybackReposito
     private val handler = Handler(Looper.getMainLooper())
     private var deadline: Long? = null
     private var tick: Runnable? = null
+    private val signalHistory = SignalLevelHistory()
     var sessionGeneration: Long = 0
         private set
 
@@ -28,6 +30,10 @@ class AndroidPlaybackRepository(private val context: Context) : PlaybackReposito
         require(!settings.adaptiveEnabled) { context.getString(R.string.error_capture_consent_required) }
         begin(settings)
         try {
+            if (settings.untilAppClosed) {
+                KeepAliveService.startConstant(context)
+                return
+            }
             player = KeepAliveAudioPlayer(
                 settings.signal,
                 settings.levelDbfs,
@@ -43,13 +49,14 @@ class AndroidPlaybackRepository(private val context: Context) : PlaybackReposito
         if (state.value.active) return
         begin(settings)
         try {
-            AdaptiveKeepAliveService.start(context, resultCode, resultData, settings)
+            KeepAliveService.start(context, resultCode, resultData, settings)
         } catch (error: Exception) {
             stop(StopReason.ERROR, error.message)
         }
     }
 
     private fun begin(settings: KeepAliveSettings) {
+        signalHistory.clear()
         sessionGeneration++
         mutableState.value = PlaybackState(PlaybackPhase.STARTING, settings)
     }
@@ -58,7 +65,7 @@ class AndroidPlaybackRepository(private val context: Context) : PlaybackReposito
         if (!state.value.active) return
         mutableState.value = state.value.copy(phase = PlaybackPhase.RUNNING)
         val minutes = state.value.settings?.timerMinutes ?: 0
-        if (minutes == 0) return
+        if (minutes <= 0) return
         deadline = SystemClock.elapsedRealtime() + minutes * 60_000L
         tick = object : Runnable {
             override fun run() {
@@ -77,19 +84,40 @@ class AndroidPlaybackRepository(private val context: Context) : PlaybackReposito
     override fun stop(reason: StopReason) = stop(reason, null)
 
     fun stop(reason: StopReason, error: String?) {
-        val adaptive = state.value.settings?.adaptiveEnabled == true
+        val serviceOwned = state.value.settings?.let {
+            it.adaptiveEnabled || it.untilAppClosed
+        } == true
         tick?.let(handler::removeCallbacks)
         tick = null
         deadline = null
         player?.stop()
         player = null
+        signalHistory.clear()
         mutableState.value = PlaybackState(stopReason = reason, error = error)
-        if (adaptive) context.stopService(Intent(context, AdaptiveKeepAliveService::class.java))
+        if (serviceOwned) context.stopService(Intent(context, KeepAliveService::class.java))
     }
 
     fun captureEnded(generation: Long, error: String? = null) {
         if (generation == sessionGeneration && state.value.active) {
             stop(if (error == null) StopReason.CAPTURE_ENDED else StopReason.ERROR, error)
+        }
+    }
+
+    fun updateSignalLevel(generation: Long, levelDbfs: Double) {
+        val current = state.value
+        if (generation == sessionGeneration && current.phase == PlaybackPhase.RUNNING &&
+            levelDbfs.isFinite()
+        ) {
+            mutableState.value = current.copy(
+                signalLevelDbfs = levelDbfs,
+                signalHistory = signalHistory.record(SystemClock.elapsedRealtime(), levelDbfs)
+            )
+        }
+    }
+
+    fun appClosed() {
+        if (state.value.active && state.value.settings?.untilAppClosed == true) {
+            stop(StopReason.USER)
         }
     }
 }

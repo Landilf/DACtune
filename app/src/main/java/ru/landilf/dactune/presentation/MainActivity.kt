@@ -8,7 +8,10 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -64,8 +67,16 @@ class MainActivity : AppCompatActivity() {
             }
 
         })[KeepAliveViewModel::class.java]
-        screen = KeepAliveScreen(this, viewModel::onAction)
+        screen = KeepAliveScreen(this, viewModel::onAction, ::showAppInfo)
         setContentView(screen.view)
+        ViewCompat.setOnApplyWindowInsetsListener(screen.view) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(screen.view)
         screen.render(viewModel.uiState.value)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -82,6 +93,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun showAppInfo() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.about_app)
+            .setMessage(getString(
+                R.string.app_info,
+                getString(R.string.description),
+                getString(R.string.adaptive_description),
+                getString(R.string.info_controls)
+            ))
+            .setPositiveButton(R.string.close_info, null)
+            .show()
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) container.androidPlaybackRepository.appClosed()
+        super.onDestroy()
     }
 
     private fun requestCapturePermission() {

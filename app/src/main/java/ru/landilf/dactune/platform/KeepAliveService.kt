@@ -19,7 +19,7 @@ import ru.landilf.dactune.domain.engine.AdaptiveSignalPolicy
 import ru.landilf.dactune.domain.model.KeepAliveSettings
 
 /** Android lifecycle and consent orchestration; audio processing lives in data/domain. */
-class AdaptiveKeepAliveService : Service() {
+class KeepAliveService : Service() {
     private val repository get() = (application as DACtuneApplication).container.androidPlaybackRepository
     private val handler = Handler(Looper.getMainLooper())
     private var player: KeepAliveAudioPlayer? = null
@@ -27,6 +27,15 @@ class AdaptiveKeepAliveService : Service() {
     private var capture: PlaybackAudioCapture? = null
     private var started = false
     private var generation = -1L
+    private val signalLevelUpdate = object : Runnable {
+
+        override fun run() {
+            val activePlayer = player ?: return
+            repository.updateSignalLevel(generation, activePlayer.currentLevelDbfs)
+            handler.postDelayed(this, 500L)
+        }
+    }
+
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             repository.captureEnded(generation); stopSelf()
@@ -44,15 +53,25 @@ class AdaptiveKeepAliveService : Service() {
         started = true
         generation = repository.sessionGeneration
         try {
+            val settings = repository.state.value.settings
+                ?: error(getString(R.string.error_no_active_session))
             val notification = createNotification()
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(
                     101,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    if (settings.adaptiveEnabled) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    else ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
                 )
             } else {
                 startForeground(101, notification)
+            }
+            val activePlayer = KeepAliveAudioPlayer(settings.signal, settings.levelDbfs, this)
+            player = activePlayer
+            activePlayer.start()
+            if (!settings.adaptiveEnabled) {
+                repository.markRunning()
+                return START_NOT_STICKY
             }
             if (Build.VERSION.SDK_INT < 29) error(getString(R.string.status_adaptive_unsupported))
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
@@ -60,17 +79,12 @@ class AdaptiveKeepAliveService : Service() {
             ) error(getString(R.string.status_record_audio_denied))
             val data =
                 intent.projectionData() ?: error(getString(R.string.error_capture_consent_required))
-            val settings = repository.state.value.settings
-                ?: error(getString(R.string.error_no_active_session))
             val manager = getSystemService(MediaProjectionManager::class.java)
             val activeProjection =
                 manager.getMediaProjection(intent.getIntExtra("result_code", 0), data)
                     ?: error(getString(R.string.error_projection_unavailable))
             projection = activeProjection
             activeProjection.registerCallback(projectionCallback, handler)
-            val activePlayer = KeepAliveAudioPlayer(settings.signal, settings.levelDbfs, this)
-            player = activePlayer
-            activePlayer.start()
             val policy = AdaptiveSignalPolicy()
             val audioCapture = PlaybackAudioCapture(this)
             capture = audioCapture
@@ -78,7 +92,7 @@ class AdaptiveKeepAliveService : Service() {
                 activeProjection, applicationInfo.uid,
                 onLevel = { dbfs ->
                     activePlayer.setTargetLevelDbfs(
-                        if (policy.shouldMute(dbfs)) null else settings.levelDbfs
+                        policy.targetLevelDbfs(dbfs, settings.levelDbfs, settings.lowerLevelDbfs)
                     )
                 },
                 onError = { error ->
@@ -90,6 +104,7 @@ class AdaptiveKeepAliveService : Service() {
                     }
                 })
             repository.markRunning()
+            signalLevelUpdate.run()
         } catch (error: Exception) {
             repository.captureEnded(generation, error.message ?: getString(R.string.unknown_error))
             stopSelf()
@@ -98,6 +113,7 @@ class AdaptiveKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(signalLevelUpdate)
         if (Build.VERSION.SDK_INT >= 29) capture?.stop()
         capture = null
         player?.stop()
@@ -108,6 +124,13 @@ class AdaptiveKeepAliveService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         repository.captureEnded(generation)
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (generation == repository.sessionGeneration) {
+            repository.appClosed()
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun createNotification(): Notification {
@@ -124,8 +147,14 @@ class AdaptiveKeepAliveService : Service() {
         )
         return NotificationCompat.Builder(this, "adaptive_keep_alive")
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(getString(R.string.adaptive_notification_title))
-            .setContentText(getString(R.string.adaptive_notification_text))
+            .setContentTitle(getString(
+                if (repository.state.value.settings?.adaptiveEnabled == true)
+                    R.string.adaptive_notification_title else R.string.keep_alive_notification_title
+            ))
+            .setContentText(getString(
+                if (repository.state.value.settings?.adaptiveEnabled == true)
+                    R.string.adaptive_notification_text else R.string.keep_alive_notification_text
+            ))
             .setContentIntent(openApp).setOngoing(true).build()
     }
 
@@ -135,6 +164,10 @@ class AdaptiveKeepAliveService : Service() {
         else getParcelableExtra("result_data")
 
     companion object {
+        fun startConstant(context: Context) {
+            ContextCompat.startForegroundService(context, Intent(context, KeepAliveService::class.java))
+        }
+
         fun start(
             context: Context,
             resultCode: Int,
@@ -144,7 +177,7 @@ class AdaptiveKeepAliveService : Service() {
             require(settings.adaptiveEnabled)
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, AdaptiveKeepAliveService::class.java).apply {
+                Intent(context, KeepAliveService::class.java).apply {
                     putExtra("result_code", resultCode)
                     putExtra("result_data", resultData)
                 })

@@ -1,19 +1,23 @@
 package ru.landilf.dactune.domain.engine
 
-/** Hysteresis prevents the signal from oscillating near a single threshold. */
+/** Continuous attenuation above the quiet-media threshold, while keeping a nonzero signal. */
 class AdaptiveSignalPolicy(
-    private val muteThresholdDbfs: Double = -42.0,
-    private val restoreThresholdDbfs: Double = -48.0
+    private val quietThresholdDbfs: Double = -48.0
 ) {
-    private var muted = false
-
     init {
-        require(restoreThresholdDbfs < muteThresholdDbfs)
+        require(quietThresholdDbfs.isFinite())
     }
 
-    fun shouldMute(mediaDbfs: Double): Boolean {
-        if (mediaDbfs >= muteThresholdDbfs) muted = true
-        else if (mediaDbfs <= restoreThresholdDbfs) muted = false
-        return muted
+    fun targetLevelDbfs(
+        mediaDbfs: Double,
+        selectedLevelDbfs: Double,
+        lowerLevelDbfs: Double
+    ): Double {
+        require(selectedLevelDbfs.isFinite())
+        require(lowerLevelDbfs.isFinite() && lowerLevelDbfs <= selectedLevelDbfs)
+        if (mediaDbfs.isNaN()) return selectedLevelDbfs
+        val reduction = (mediaDbfs - quietThresholdDbfs)
+            .coerceIn(0.0, selectedLevelDbfs - lowerLevelDbfs)
+        return selectedLevelDbfs - reduction
     }
 }

@@ -7,6 +7,8 @@ data class PlaybackState(
     val phase: PlaybackPhase = PlaybackPhase.IDLE,
     val settings: KeepAliveSettings? = null,
     val remainingSeconds: Long? = null,
+    val signalLevelDbfs: Double? = null,
+    val signalHistory: List<SignalLevelSample> = emptyList(),
     val stopReason: StopReason = StopReason.NONE,
     val error: String? = null
 ) {

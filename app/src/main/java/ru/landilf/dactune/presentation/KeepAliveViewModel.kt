@@ -55,6 +55,15 @@ class KeepAliveViewModel(
                 )
 
                 is KeepAliveAction.SetTimer -> settings.copy(timerMinutes = action.minutes)
+                is KeepAliveAction.SetLowerLevel -> settings.copy(
+                    lowerLevelDbfs = KeepAliveSettings.lowerLevelFromProgress(action.progress)
+                )
+
+                is KeepAliveAction.StepLowerLevel -> settings.copy(
+                    lowerLevelDbfs = settings.lowerLevelDbfs +
+                        action.steps * KeepAliveSettings.LEVEL_STEP_DB
+                )
+
                 is KeepAliveAction.SetAdaptive -> settings.copy(adaptiveEnabled = action.enabled)
                 KeepAliveAction.TogglePlayback -> settings
             }

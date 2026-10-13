@@ -10,6 +10,7 @@ import android.media.AudioTrack
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
+import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
 
@@ -29,6 +30,17 @@ class KeepAliveAudioPlayer(
 
     private val targetAmplitude = AtomicReference(levelToAmplitude(levelDbfs))
     private val running = AtomicBoolean(false)
+
+    @Volatile
+    private var writtenAmplitude = targetAmplitude.get()
+
+    /** Digital peak envelope of the most recently written buffer, after amplitude smoothing. */
+    val currentLevelDbfs: Double
+        get() = if (writtenAmplitude > 0f) {
+            20.0 * log10(writtenAmplitude.toDouble())
+        } else {
+            Double.NEGATIVE_INFINITY
+        }
 
     private var audioTrack: AudioTrack? = null
     private var writerThread: Thread? = null
@@ -161,6 +173,8 @@ class KeepAliveAudioPlayer(
                 ) < 0
             ) {
                 running.set(false)
+            } else {
+                writtenAmplitude = currentAmplitude
             }
         }
     }

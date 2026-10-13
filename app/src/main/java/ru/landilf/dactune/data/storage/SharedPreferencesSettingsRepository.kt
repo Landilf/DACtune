@@ -20,6 +20,7 @@ class SharedPreferencesSettingsRepository(context: Context) : SettingsRepository
         preferences.edit {
             putString("signal", normalized.signal.name)
             putFloat("level_dbfs", normalized.levelDbfs.toFloat())
+            putFloat("lower_level_dbfs", normalized.lowerLevelDbfs.toFloat())
             putInt("timer_minutes", normalized.timerMinutes)
             putBoolean("adaptive_enabled", normalized.adaptiveEnabled)
         }
@@ -33,6 +34,10 @@ class SharedPreferencesSettingsRepository(context: Context) : SettingsRepository
                 it.name == preferences.getString("signal", defaults.signal.name)
             } ?: defaults.signal,
             levelDbfs = preferences.getFloat("level_dbfs", defaults.levelDbfs.toFloat()).toDouble(),
+            lowerLevelDbfs = preferences.getFloat(
+                "lower_level_dbfs",
+                preferences.getFloat("level_dbfs", defaults.levelDbfs.toFloat()) - 40f
+            ).toDouble(),
             timerMinutes = preferences.getInt("timer_minutes", defaults.timerMinutes),
             adaptiveEnabled = preferences.getBoolean("adaptive_enabled", defaults.adaptiveEnabled)
         ).normalized()
