@@ -1,0 +1,3 @@
+<resources>
+    <style name="Base.Theme.DACtune" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>
